@@ -9,9 +9,9 @@ type DbHandle = Arc<Mutex<Db>>;
 #[tokio::main]
 async fn main() -> () {
     // Bind the listener to the address
-    let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:6378").await.unwrap();
 
-    let dbHandle: DbHandle = Arc::new(Mutex::new(HashMap::new()));
+    let db_handle: DbHandle = Arc::new(Mutex::new(HashMap::new()));
 
     loop {
         // The second item contains the IP and port of the new connection.
@@ -19,14 +19,14 @@ async fn main() -> () {
         // A new task is spawned for each inbound socket. The socket is
         // moved to the new task and processed there.
 
-        let dbHandle: DbHandle = dbHandle.clone();
+        let db_handle: DbHandle = db_handle.clone();
         tokio::spawn(async move {
-            process(dbHandle, socket).await;
+            process(db_handle, socket).await;
         });
     }
 }
 
-async fn process(dbHandle: DbHandle, socket: TcpStream) {
+async fn process(db_handle: DbHandle, socket: TcpStream) {
     use mini_redis::Command;
 
     // Connection, provided by `mini-redis`, handles parsing frames from
@@ -37,12 +37,12 @@ async fn process(dbHandle: DbHandle, socket: TcpStream) {
     while let Some(frame) = connection.read_frame().await.unwrap() {
         let response = match Command::from_frame(frame).unwrap() {
             Command::Set(cmd) => {
-                let mut db = dbHandle.lock().unwrap();
+                let mut db = db_handle.lock().unwrap();
                 db.insert(cmd.key().to_string(), cmd.value().clone());
                 mini_redis::Frame::Simple("OK".to_string())
             }
             Command::Get(cmd) => {
-                let db = dbHandle.lock().unwrap();
+                let db = db_handle.lock().unwrap();
                 if let Some(value) = db.get(cmd.key()) {
                     mini_redis::Frame::Bulk(value.clone())
                 } else {
