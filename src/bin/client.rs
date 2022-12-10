@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use futures::future;
 use mini_redis::client;
 use tokio::sync::{mpsc, oneshot};
 
@@ -90,6 +91,9 @@ async fn main() {
             }
         }
     });
+
+    future::join_all(read_futures).await;
+    future::join_all(write_futures).await;
 
     manager.await.unwrap();
 }
