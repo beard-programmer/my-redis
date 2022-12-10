@@ -23,11 +23,56 @@ type Responder<T> = oneshot::Sender<mini_redis::Result<T>>;
 #[tokio::main]
 async fn main() {
     let (tx, mut rx) = mpsc::channel(32);
-    // Clone a `tx` handle for the second f
-    let tx2 = tx.clone();
+
+    let read_futures: Vec<tokio::task::JoinHandle<()>> = (0..5)
+        .into_iter()
+        .map(|thread_number| {
+            let transmitter = tx.clone();
+            tokio::spawn(async move {
+                let (resp_tx, resp_rx) = oneshot::channel();
+                let key = format!("foo#{}", thread_number).into();
+                let cmd = Command::Get { key, resp: resp_tx };
+
+                if transmitter.send(cmd).await.is_err() {
+                    eprintln!("connection task shutdown");
+                    return;
+                }
+
+                // Await the response
+                let res = resp_rx.await;
+                println!("GOT (Get) = {:?}", res);
+            })
+        })
+        .collect();
+
+    let write_futures: Vec<tokio::task::JoinHandle<()>> = (0..5)
+        .into_iter()
+        .map(|thread_number| {
+            let transmitter = tx.clone();
+            tokio::spawn(async move {
+                let (resp_tx, resp_rx) = oneshot::channel();
+                let key = format!("foo#{}", thread_number).into();
+                let val = format!("bar#{}", thread_number).into();
+                let cmd = Command::Set {
+                    key,
+                    val,
+                    resp: resp_tx,
+                };
+
+                if transmitter.send(cmd).await.is_err() {
+                    eprintln!("connection task shutdown");
+                    return;
+                }
+
+                let res = resp_rx.await;
+                println!("GOT (Set) = {:?}", res);
+            })
+        })
+        .collect();
+
+    drop(tx);
 
     let manager = tokio::spawn(async move {
-        // Open a connection to the mini-redis address.
         let mut client = client::connect("127.0.0.1:6378").await.unwrap();
 
         while let Some(cmd) = rx.recv().await {
@@ -46,46 +91,5 @@ async fn main() {
         }
     });
 
-    // Spawn two tasks, one setting a value and other querying for key that was
-    // set.
-    let t1 = tokio::spawn(async move {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        let cmd = Command::Get {
-            key: "foo".to_string(),
-            resp: resp_tx,
-        };
-
-        // Send the GET request
-        if tx.send(cmd).await.is_err() {
-            eprintln!("connection task shutdown");
-            return;
-        }
-
-        // Await the response
-        let res = resp_rx.await;
-        println!("GOT (Get) = {:?}", res);
-    });
-
-    let t2 = tokio::spawn(async move {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        let cmd = Command::Set {
-            key: "foo".to_string(),
-            val: "bar".into(),
-            resp: resp_tx,
-        };
-
-        // Send the SET request
-        if tx2.send(cmd).await.is_err() {
-            eprintln!("connection task shutdown");
-            return;
-        }
-
-        // Await the response
-        let res = resp_rx.await;
-        println!("GOT (Set) = {:?}", res);
-    });
-
-    t1.await.unwrap();
-    t2.await.unwrap();
     manager.await.unwrap();
 }
